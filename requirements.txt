@@ -15,3 +15,7 @@ pyradiomics>=3.1
 
 # Optional: automatic organ segmentation on CT (physiological-uptake exclusion, liver reference)
 # TotalSegmentator>=2.4
+
+# Learning / visual checks (notebooks/explore_results.ipynb)
+matplotlib>=3.7
+jupyterlab>=4.0

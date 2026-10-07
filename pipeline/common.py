@@ -200,6 +200,12 @@ def label_lesions(mask: sitk.Image, pet: sitk.Image, min_volume_ml: float = 0.0)
     Labels are ordered by SUVmax (label 1 = hottest lesion). Lesions smaller
     than ``min_volume_ml`` are dropped.
     """
+    if (mask.GetSize() != pet.GetSize() or not np.allclose(mask.GetSpacing(), pet.GetSpacing(), atol=1e-3)
+            or not np.allclose(mask.GetOrigin(), pet.GetOrigin(), atol=1e-2)):
+        # e.g. a mask exported from 3D Slicer with another reference volume
+        warnings.warn("Mask geometry differs from PET - resampling mask to the PET grid (check the export)")
+        mask = resample_to_reference(sitk.Cast(mask, sitk.sitkUInt8), pet, is_mask=True)
+    mask = sitk.Cast(mask > 0, sitk.sitkUInt8)
     cc = sitk.ConnectedComponent(mask, True)
     stats = sitk.LabelIntensityStatisticsImageFilter()
     stats.Execute(cc, pet)
