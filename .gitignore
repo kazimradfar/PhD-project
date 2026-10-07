@@ -1,0 +1,10 @@
+# Patient data must never be committed
+data/*
+!data/README.md
+results/
+*.nii
+*.nii.gz
+*.dcm
+__pycache__/
+*.pyc
+.venv/

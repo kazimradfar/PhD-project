@@ -1,0 +1,17 @@
+# Core imaging
+numpy>=1.24
+scipy>=1.10
+pandas>=2.0
+SimpleITK>=2.3
+pydicom>=2.4
+PyYAML>=6.0
+PyWavelets>=1.4
+
+# Radiomics (IBSI-compliant feature extraction)
+# On Python >= 3.12 the PyPI release may fail to build; install from GitHub instead:
+#   pip install docopt-ng pykwalify
+#   pip install --no-deps "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git"
+pyradiomics>=3.1
+
+# Optional: automatic organ segmentation on CT (physiological-uptake exclusion, liver reference)
+# TotalSegmentator>=2.4

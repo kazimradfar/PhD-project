@@ -1,0 +1,40 @@
+# PyRadiomics settings for PSMA PET (SUVbw images)
+# Reference: IBSI (Zwanenburg et al., Radiology 2020); PyRadiomics docs.
+# Report every setting below in the Methods section of your paper.
+
+imageType:
+  Original: {}
+  LoG:
+    sigma: [2.0, 4.0, 6.0]        # mm; must be >= voxel size after resampling
+  Wavelet: {}
+
+featureClass:
+  shape:
+  firstorder:
+  glcm:
+  glrlm:
+  glszm:
+  gldm:
+  ngtdm:
+
+setting:
+  # Discretisation: fixed bin width (FBW) keeps the SUV scale meaningful between patients.
+  # PSMA lesions reach SUV 50-100, so 0.5 SUV gives a reasonable number of bins.
+  # Test 0.25 / 0.5 / 1.0 in a sensitivity analysis.
+  binWidth: 0.5
+  # Isotropic resampling (IBSI) - choose close to the native PET voxel size.
+  resampledPixelSpacing: [4.0, 4.0, 4.0]
+  interpolator: sitkBSpline
+  padDistance: 10
+  # PET has no negative SUV; clip interpolation undershoot.
+  resegmentRange: [0.0]
+  resegmentMode: absolute
+  label: 1
+  minimumROIDimensions: 3
+  minimumROISize: 8               # voxels after resampling (~0.5 mL at 4 mm)
+  normalize: false
+  correctMask: true
+  geometryTolerance: 0.001
+  force2D: false
+  voxelArrayShift: 0
+  additionalInfo: true
