@@ -1,100 +1,91 @@
-"""Step 5 - Build the patient-level dataset for machine learning.
+"""Step 5 - Patient-level imaging feature table (no outcome data).
 
-Merges, per patient:
-  * conventional PET parameters                  (prefix: none)
-  * inter-lesion heterogeneity of SUVmax / volume (prefix: het_)
-  * whole-body PET / CT radiomics                (prefix: wbpet_, wbct_)
-  * radiomics of the hottest and largest lesion  (prefix: hot_, big_)
-  * clinical data and the response label          (data/clinical.csv, optional)
+Lesion features are summarised per patient in the three pre-specified ways of the proposal:
+  * wb_    : features of the whole-body union of all lesions        (from step 4, level wholebody)
+  * vwm_   : volume-weighted mean of each feature across lesions
+  * sd_    : standard deviation of each feature between lesions     (>= 2 lesions)
+  * range_ : range (max - min) of each feature between lesions      (>= 2 lesions)
+Texture features are summarised only over lesions that have them (>= 64 voxels).
+Conventional PET parameters (step 3) are added without prefix.
 
-Response label (PCWG3): PSA50 = PSA decline >= 50 % from baseline, computed from
-`psa_baseline` and `psa_followup` (e.g. 12 weeks or after 2 cycles) if both columns exist.
+Imaging and outcome data are kept apart on purpose (blinding / pre-registration):
+outcomes are built in step 7 and joined only in the modelling phase.
 
-Output: results/patient_level_dataset.csv
+Output: results/<mask>/patient_features_pet_bw<bw>.csv
 
 Usage:
-    python -m pipeline.step5_build_dataset
+    python -m pipeline.step5_build_dataset                      # reader1, bw 0.5
+    python -m pipeline.step5_build_dataset --mask reader2
+    python -m pipeline.step5_build_dataset --bin-width 0.25
 """
 
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
+import warnings
 
+import numpy as np
 import pandas as pd
 
-from pipeline.common import DATA_DIR, RESULTS_DIR, log, setup_logging
+from pipeline.common import MASK_FILES, log, results_dir, setup_logging
 
-FEATURE_PREFIXES = ("original_", "log-", "wavelet-")
-
-
-def _read(name: str) -> pd.DataFrame | None:
-    f = RESULTS_DIR / name
-    if not f.exists() or f.stat().st_size == 0:
-        return None
-    df = pd.read_csv(f)
-    return df if not df.empty else None
+FEATURE_PREFIXES = ("original_", "log-", "wavelet-", "square_", "exponential_", "gradient_")
 
 
-def _features(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
-    cols = [c for c in df.columns if c.startswith(FEATURE_PREFIXES)]
-    return df.set_index("patient_id")[cols].add_prefix(prefix)
+def _feature_cols(df: pd.DataFrame) -> list[str]:
+    return [c for c in df.columns if c.startswith(FEATURE_PREFIXES)]
 
 
-def heterogeneity(lesions: pd.DataFrame) -> pd.DataFrame:
-    g = lesions.groupby("patient_id")
-    out = pd.DataFrame({
-        "het_suvmax_cv": g["suvmax"].std() / g["suvmax"].mean(),
-        "het_suvmax_range": g["suvmax"].max() - g["suvmax"].min(),
-        "het_suvmax_min": g["suvmax"].min(),
-        "het_volume_cv": g["volume_ml"].std() / g["volume_ml"].mean(),
-    })
-    return out
+def aggregate_lesions(lesions: pd.DataFrame) -> pd.DataFrame:
+    """Volume-weighted mean, SD and range of every lesion feature, per patient."""
+    feats = _feature_cols(lesions)
+    out = {}
+    for pid, g in lesions.groupby("patient_id"):
+        x = g[feats].to_numpy(dtype=float)
+        w = g["lesion_volume_ml"].to_numpy(dtype=float)[:, None]
+        valid = ~np.isnan(x)
+        n = valid.sum(axis=0)
+        with np.errstate(invalid="ignore", divide="ignore"), warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN columns (no textured lesion)
+            vwm = np.where(n >= 1, np.nansum(np.where(valid, x * w, 0), axis=0) / np.where(valid, w, 0).sum(axis=0), np.nan)
+            sd = np.where(n >= 2, np.nanstd(x, axis=0, ddof=1), np.nan)
+            rng = np.where(n >= 2, np.nanmax(x, axis=0) - np.nanmin(x, axis=0), np.nan)
+        row = {}
+        for prefix, vals in (("vwm_", vwm), ("sd_", sd), ("range_", rng)):
+            row.update({prefix + f: v for f, v in zip(feats, vals)})
+        row["n_lesions_with_texture"] = int(g["has_texture"].sum())
+        out[pid] = row
+    return pd.DataFrame.from_dict(out, orient="index")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--clinical", type=Path, default=DATA_DIR / "clinical.csv")
+    ap.add_argument("--mask", choices=list(MASK_FILES), default="reader1")
+    ap.add_argument("--bin-width", type=float, default=0.5)
+    ap.add_argument("--modality", default="pet", choices=["pet", "ct"])
     args = ap.parse_args()
     setup_logging()
 
-    conv = _read("conventional_patient.csv")
-    if conv is None:
-        raise SystemExit("Run step 3 first (results/conventional_patient.csv missing)")
-    parts = [conv.set_index("patient_id").drop(columns=["mask_used"], errors="ignore")]
+    rdir = results_dir(args.mask)
+    tag = f"{args.modality}_bw{args.bin_width:g}"
+    conv_f, wb_f, les_f = (rdir / "conventional_patient.csv", rdir / f"radiomics_{args.modality}_wholebody_bw{args.bin_width:g}.csv",
+                           rdir / f"radiomics_{args.modality}_lesion_bw{args.bin_width:g}.csv")
+    for f in (conv_f, wb_f, les_f):
+        if not f.exists():
+            raise SystemExit(f"{f} missing - run steps 3 and 4 with the same --mask / --bin-width first")
 
-    les = _read("conventional_lesion.csv")
-    if les is not None:
-        parts.append(heterogeneity(les))
+    conv = pd.read_csv(conv_f).set_index("patient_id")
+    wb = pd.read_csv(wb_f)
+    wb = wb.set_index("patient_id")[_feature_cols(wb)].add_prefix("wb_")
+    agg = aggregate_lesions(pd.read_csv(les_f))
 
-    for name, prefix in (("radiomics_pet_wholebody.csv", "wbpet_"), ("radiomics_ct_wholebody.csv", "wbct_")):
-        df = _read(name)
-        if df is not None:
-            parts.append(_features(df, prefix))
-
-    rl = _read("radiomics_pet_lesion.csv")
-    if rl is not None:
-        hottest = rl.loc[rl.groupby("patient_id")["lesion_suvmax"].idxmax()]
-        largest = rl.loc[rl.groupby("patient_id")["lesion_volume_ml"].idxmax()]
-        parts += [_features(hottest, "hot_"), _features(largest, "big_")]
-
-    data = pd.concat(parts, axis=1).copy()
+    data = pd.concat([conv, wb, agg], axis=1).copy()
     data.index.name = "patient_id"
-
-    if args.clinical.exists():
-        clin = pd.read_csv(args.clinical).set_index("patient_id")
-        if {"psa_baseline", "psa_followup"} <= set(clin.columns):
-            clin["psa_change_pct"] = 100 * (clin["psa_followup"] - clin["psa_baseline"]) / clin["psa_baseline"]
-            clin["psa50_response"] = (clin["psa_change_pct"] <= -50).astype("Int64")
-            clin.loc[clin["psa_change_pct"].isna(), "psa50_response"] = pd.NA
-        data = clin.join(data, how="right").copy()
-    else:
-        log.warning("No %s - dataset has no clinical data / response label yet", args.clinical)
-
-    out = RESULTS_DIR / "patient_level_dataset.csv"
+    out = rdir / f"patient_features_{tag}.csv"
     data.reset_index().to_csv(out, index=False)
-    n_rad = sum(c.startswith(("wbpet_", "wbct_", "hot_", "big_")) for c in data.columns)
-    log.info("Wrote %s: %d patients x %d columns (%d radiomics features)", out.name, len(data), data.shape[1], n_rad)
+    n_rad = sum(c.startswith(("wb_", "vwm_", "sd_", "range_")) for c in data.columns)
+    log.info("Wrote %s: %d patients, %d radiomic + %d conventional columns",
+             out, len(data), n_rad, conv.shape[1])
 
 
 if __name__ == "__main__":

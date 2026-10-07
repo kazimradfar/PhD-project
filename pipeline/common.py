@@ -139,15 +139,21 @@ def suv_bw_factor(datasets: list[pydicom.Dataset]) -> tuple[float, dict]:
     decayed_dose = dose * 2 ** (-delta_s / half_life)
     factor = weight_kg * 1000.0 / decayed_dose
     info = {
+        "pet_date": scan_start.date().isoformat(),
         "radiopharmaceutical": str(getattr(rp, "Radiopharmaceutical", "")),
         "injected_MBq": dose / 1e6,
         "half_life_s": half_life,
         "weight_kg": weight_kg,
         "uptake_min": delta_s / 60.0,
         "suv_factor": factor,
+        # technical covariates (ComBat batches / sensitivity analyses, never predictors)
+        "institution": str(getattr(ds, "InstitutionName", "")),
+        "station": str(getattr(ds, "StationName", "")),
         "manufacturer": str(getattr(ds, "Manufacturer", "")),
         "scanner": str(getattr(ds, "ManufacturerModelName", "")),
         "reconstruction": str(getattr(ds, "ReconstructionMethod", "")),
+        "recon_filter": str(getattr(ds, "ConvolutionKernel", "")),
+        "matrix": f"{ds.Rows}x{ds.Columns}",
         "voxel_mm": "x".join(f"{v:.2f}" for v in (*map(float, ds.PixelSpacing), float(ds.SliceThickness))),
     }
     return factor, info
@@ -166,13 +172,26 @@ def voxel_volume_ml(image: sitk.Image) -> float:
 
 # --------------------------------------------------------------------------- masks
 
-def load_tumor_mask(mask_dir: Path) -> tuple[sitk.Image, str]:
-    """Prefer the manually reviewed mask (3D Slicer) over the automatic one."""
-    for name in ("tumor_mask_reviewed.nii.gz", "tumor_mask.nii.gz"):
-        f = Path(mask_dir) / name
-        if f.exists():
-            return sitk.ReadImage(str(f), sitk.sitkUInt8) > 0, name
-    raise FileNotFoundError(f"No tumor mask in {mask_dir} (run step 2 first)")
+MASK_FILES = {
+    "auto": "tumor_mask_auto.nii.gz",        # step 2 output (nnU-Net or threshold), uncorrected
+    "reader1": "tumor_mask_reader1.nii.gz",  # corrected by reader 1 + senior review (main analysis)
+    "reader2": "tumor_mask_reader2.nii.gz",  # independent correction by reader 2 (ICC subset)
+}
+
+
+def load_tumor_mask(mask_dir: Path, mask: str = "reader1") -> sitk.Image:
+    """Load a binary tumour mask: ``auto``, ``reader1`` or ``reader2`` (see MASK_FILES)."""
+    f = Path(mask_dir) / MASK_FILES[mask]
+    if not f.exists():
+        raise FileNotFoundError(f"{f} not found")
+    return sitk.ReadImage(str(f), sitk.sitkUInt8) > 0
+
+
+def results_dir(mask: str) -> Path:
+    """Results of steps 3-6 are kept separate per mask version (main analysis vs. sensitivity)."""
+    d = RESULTS_DIR / mask
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 def label_lesions(mask: sitk.Image, pet: sitk.Image, min_volume_ml: float = 0.0) -> tuple[sitk.Image, list[dict]]:

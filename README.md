@@ -1,191 +1,202 @@
-# پیش‌بینی پاسخ به درمان ‎¹⁷⁷Lu-PSMA‎ در mCRPC با رادیومیکس و هوش مصنوعی
+# پیش‌بینی پاسخ به درمان و پیامدهای بالینی ‎[¹⁷⁷Lu]Lu-PSMA-617‎ در mCRPC با رادیومیکس ‎[⁶⁸Ga]Ga-PSMA-11 PET/CT‎ و یادگیری ماشین
 
-**فاز ۱: استخراج ویژگی‌های رادیومیکس از PET/CT پایه‌ی PSMA (‎⁶⁸Ga/¹⁸F‎)**
+**رسالهٔ دکتری فیزیک پزشکی، دانشگاه علوم پزشکی تهران (بیمارستان‌های امام خمینی و شریعتی)**
 
-این مخزن pipeline پایتونِ مرحله‌به‌مرحله‌ی پروژه است، از فایل‌های DICOM تا یک جدول آماده برای یادگیری ماشین.
+این مخزن کد بخش تصویربرداری پروپوزال را در بر دارد: از DICOM تا جدول ویژگی‌های تکرارپذیر در سطح بیمار، به‌همراه ساخت endpointها از CRF. این مراحل طبق پروپوزال **بدون دسترسی به داده‌های پیامد** انجام می‌شوند (جعبه‌های بنفش Figure 2).
 
 ```
-DICOM PET/CT ──► ① NIfTI + SUV ──► ② سگمنت‌کردن ضایعات ──► بازبینی پزشک (3D Slicer)
-                                                              │
-        ⑤ دیتاست نهایی در سطح بیمار ◄── ④ رادیومیکس ◄── ③ پارامترهای مرسوم PET
+DICOM ─► ① SUV ─► ② nnU-Net + حذف جذب فیزیولوژیک ─► اصلاح Reader 1 (+ بازبینی ارشد)
+                                                   └─► اصلاح مستقل Reader 2 (۳۰ بیمار)
+      ─► ③ پارامترهای مرسوم PET ─► ④ رادیومیکس IBSI ─► ⑤ تجمیع در سطح بیمار ─► ⑥ فیلتر ICC ≥ 0.75
+CRF ─► ⑦ endpointها: OS، PFS، پاسخ ۱۲ هفته، recurrence (competing risk) + تقسیم temporal
+                                       ↓
+                        فاز ۲: ComBat، انتخاب ویژگی، مدل‌سازی (بعد از ثبت OSF)
 ```
 
-| مرحله | اسکریپت | خروجی |
+| مرحله | اسکریپت | مطابق پروپوزال |
 |---|---|---|
-| ۰ | `tools/make_synthetic_data.py` | دادهٔ مصنوعی برای تست (اختیاری) |
-| ۱ | `pipeline/step1_dicom_to_nifti.py` | `PET_SUV.nii.gz`، `CT.nii.gz`، `acquisition_info.csv` |
-| ۲ | `pipeline/step2_segment_lesions.py` | `tumor_mask.nii.gz`، `lesions_label.nii.gz`، `liver_ref.nii.gz` |
-| ۳ | `pipeline/step3_conventional_metrics.py` | SUVmax، SUVpeak، SUVmean، PSMA-TV، TL-PSMA |
-| ۴ | `pipeline/step4_extract_radiomics.py` | ویژگی‌های رادیومیکس (کل‌بدن و تک‌ضایعه، PET و CT) |
-| ۵ | `pipeline/step5_build_dataset.py` | `patient_level_dataset.csv` به‌همراه برچسب PSA50 |
+| ۱ | `pipeline/step1_dicom_to_nifti.py` | QC، تبدیل به SUVbw، ثبت پارامترهای تصویربرداری و بازسازی (covariateهای فنی) |
+| ۲ | `pipeline/step2_segment_lesions.py` | nnU-Net آموزش‌دیده روی PSMA-PET-CT-Lesions، حذف جذب فیزیولوژیک |
+| ۳ | `pipeline/step3_conventional_metrics.py` | SUVmean کل‌بدن و PSMA-TV (مدل مرجع)؛ SUVmax، TL-PSMA و تعداد ضایعات (توصیفی) |
+| ۴ | `pipeline/step4_extract_radiomics.py` | PyRadiomics، bin width = 0.5 SUV، texture فقط برای ضایعات با حداقل ۶۴ وکسل |
+| ۵ | `pipeline/step5_build_dataset.py` | سه روش تجمیع: union کل‌بدن، میانگین وزنی حجمی، پراکندگی (SD و range) |
+| ۶ | `pipeline/step6_reproducibility.py` | ICC(2,1) با absolute agreement و single measure؛ حذف ویژگی‌های با ICC < 0.75 |
+| ۷ | `pipeline/step7_outcomes.py` | OS، PFS، پاسخ اولیه، recurrence با مرگ به‌عنوان competing event |
+
+ابزارهای کمکی در `tools/`:
+- `prepare_nnunet_input.py`: آماده‌سازی ورودی nnU-Net
+- `select_icc_subset.py`: انتخاب تصادفی ۳۰ بیمار برای Reader 2
+- `make_synthetic_data.py` و `simulate_readers.py`: فقط برای تست با دادهٔ مصنوعی
+
+> 🔒 **حریم خصوصی، طبق بند Ethics پروپوزال:** همهٔ پردازش‌ها روی workstation داخل بیمارستان یا TUMS انجام شود. هیچ دادهٔ بیمار (حتی de-identified) نباید به گیت‌هاب یا سرویس ابری آپلود شود. `.gitignore` پوشهٔ `data/` و `results/` را کنار می‌گذارد.
 
 ---
 
-## قدم ۰: آماده‌سازی محیط
+## قدم ۰: نصب و تست با دادهٔ مصنوعی
 
 ```bash
-git clone https://github.com/kazimradfar/PhD-project.git
-cd PhD-project
+git clone https://github.com/kazimradfar/PhD-project.git && cd PhD-project
 python -m venv .venv && source .venv/bin/activate      # در ویندوز: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
+> اگر `pyradiomics` روی پایتون ۳.۱۲ یا جدیدتر نصب نشد، از Python 3.10 یا 3.11 استفاده کنید، یا:
+> `pip install docopt-ng pykwalify && pip install --no-deps "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git"`
 
-> اگر `pyradiomics` روی پایتون ۳.۱۲ یا جدیدتر نصب نشد:
-> ```bash
-> pip install docopt-ng pykwalify
-> pip install --no-deps "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git"
-> ```
-> یا از Python 3.10 یا 3.11 استفاده کنید که نسخهٔ PyPI روی آن‌ها بدون مشکل نصب می‌شود.
-
-**تست سریع با دادهٔ مصنوعی** (قبل از کار با دادهٔ واقعی حتماً اجرا کنید):
-
+**تست کامل pipeline** (حدود یک دقیقه):
 ```bash
-python tools/make_synthetic_data.py --n 3        # در data/raw و data/totalseg ساخته می‌شود
+python tools/make_synthetic_data.py --n 12
 python -m pipeline.step1_dicom_to_nifti
-python -m pipeline.step2_segment_lesions
-python -m pipeline.step3_conventional_metrics
-python -m pipeline.step4_extract_radiomics --modalities PET CT
-python -m pipeline.step5_build_dataset
+python -m pipeline.step2_segment_lesions --method threshold
+python tools/simulate_readers.py                     # فقط برای دمو
+for m in reader1 reader2; do
+  python -m pipeline.step3_conventional_metrics --mask $m
+  python -m pipeline.step4_extract_radiomics    --mask $m
+  python -m pipeline.step5_build_dataset        --mask $m
+done
+python -m pipeline.step6_reproducibility
+python -m pipeline.step7_outcomes --data-lock 2026-06-30
 ```
-
-اگر همه‌چیز درست باشد، پوشهٔ `results/` ساخته می‌شود. **بعد از تست، `data/raw`، `data/nifti`، `data/masks` و `results` را پاک کنید.**
+پس از تست، `data/raw`، `data/nifti`، `data/masks`، `data/totalseg`، `data/crf.csv` و `results` را پاک کنید.
 
 ---
 
-## قدم ۱: سازمان‌دهی داده‌ها و تبدیل به SUV
+## قدم ۱: QC تصاویر و تبدیل به SUV
 
-### ۱-الف) چیدمان پوشه‌ها
 ```
-data/raw/RLT001/PET/*.dcm     ← سری PET تصحیح‌شده برای تضعیف (AC)، نه NAC
-data/raw/RLT001/CT/*.dcm      ← CT کم‌دوزِ همان جلسه
-data/clinical.csv             ← اطلاعات بالینی (پایین‌تر توضیح داده شده)
+data/raw/<pid>/PET/*.dcm    ← سری PET تصحیح‌شده (AC) پایه، حداکثر ۸ هفته قبل از سیکل ۱
+data/raw/<pid>/CT/*.dcm     ← CT کم‌دوز همان جلسه
 ```
-- در هر پوشه **فقط یک سری** قرار دهید؛ اگر چند سری باشد، اسکریپت خطا می‌دهد.
-- فقط از **کد مستعار** (مثل `RLT001`) استفاده کنید و قبل از هر کاری داده‌ها را de-identify کنید. دادهٔ بیمار **هرگز** نباید در گیت‌هاب قرار بگیرد؛ `.gitignore` این را تضمین می‌کند.
-- فقط PET **پایه** (پیش از سیکل اول) را وارد کنید. برای هر بیمار، فاصلهٔ زمانی PET تا سیکل اول را در `clinical.csv` ثبت کنید.
-
-### ۱-ب) اجرا
 ```bash
 python -m pipeline.step1_dicom_to_nifti
 ```
-فرمول SUV وزن-بدن (Body-weight SUV) طبق QIBA:
-
-$$SUV_{bw} = \frac{C_{PET}\,[Bq/mL] \times W\,[g]}{A_{inj}\,[Bq] \times 2^{-\Delta t / T_{1/2}}}$$
-
-### ۱-ج) کنترل کیفیت (QC) – خیلی مهم
-فایل `results/acquisition_info.csv` را باز کنید و این موارد را بررسی کنید:
-- `uptake_min`: برای ⁶⁸Ga-PSMA-11 معمولاً ۴۵ تا ۷۵ دقیقه است. اعداد غیرعادی معمولاً از خطای تگ‌های تاریخ یا زمان می‌آیند.
-- `injected_MBq` و `weight_kg`: باید با پرونده هم‌خوانی داشته باشند.
-- `scanner` و `reconstruction` و `voxel_mm`: اگر چند اسکنر یا چند پروتکل بازسازی دارید، بعداً به **هارمونیزه‌سازی (ComBat)** نیاز خواهید داشت.
-- یک بیمار را در 3D Slicer باز کنید. SUV کبد باید حدود ۴ تا ۸ و SUV پس‌زمینهٔ عضله کمتر از ۱ باشد.
-
-> ⚠️ بعضی دستگاه‌های Philips و GE واحد تصویر را `CNTS` یا `GML` ذخیره می‌کنند. در این حالت اسکریپت خطا می‌دهد و باید از ضریب SUV اختصاصی سازنده استفاده کرد.
+- **معیار خروج پروپوزال:** اگر تگ‌های لازم برای SUV (اکتیویتهٔ تزریقی، زمان تزریق و تصویربرداری، وزن) ناقص باشند، بیمار با خطا گزارش می‌شود. این بیماران را در فلوچارت STARD/TRIPOD به‌عنوان «excluded» ثبت کنید.
+- فایل `results/acquisition_info.csv` این ستون‌ها را دارد: `institution`، `scanner`، `reconstruction`، `recon_filter`، `voxel_mm`، `injected_MBq` و `uptake_min`. این‌ها همان **technical covariateها** برای ComBat و تحلیل‌های حساسیت هستند (نه predictor).
+- بازهٔ معمول uptake time برای ⁶⁸Ga-PSMA-11 حدود ۵۰ تا ۱۰۰ دقیقه است (EANM/SNMMI 2023). مقادیر خارج از این بازه را بررسی کنید.
 
 ---
 
-## قدم ۲: سگمنت‌کردن ضایعات (Whole-body tumour segmentation)
+## قدم ۲: سگمنت‌کردن کل‌بدن
 
-### ۲-الف) سگمنت‌کردن ارگان‌ها با TotalSegmentator (توصیه‌شده)
-برای حذف جذب فیزیولوژیک PSMA (غدد بزاقی، کلیه، طحال، روده، مثانه) و همچنین برای تعیین مرجع کبد:
+### ۲-الف) مدل nnU-Net (روش اصلی)
+1. دیتاست **PSMA-PET-CT-Lesions** (TCIA، ۵۹۷ مطالعه) را طبق لایسنس آن دانلود کنید.
+2. آن را به فرمت nnU-Net v2 تبدیل کنید و مدل `3d_fullres` را با 5-fold آموزش دهید. **ترتیب کانال‌ها:** `_0000` = CT resample‌شده روی شبکهٔ PET و `_0001` = SUV.
+3. inference روی دادهٔ محلی:
 ```bash
-pip install TotalSegmentator
-TotalSegmentator -i data/nifti/RLT001/CT.nii.gz -o data/totalseg/RLT001 --fast
-TotalSegmentator -i data/nifti/RLT001/CT.nii.gz -o data/totalseg/RLT001 --task head_glands_cavities   # غدد بزاقی
+python tools/prepare_nnunet_input.py
+nnUNetv2_predict -i data/nnunet_input -o data/nnunet_pred -d <DatasetID> -c 3d_fullres
 ```
+4. پروپوزال «adapted to the local data» گفته است. پیشنهاد: بعد از اصلاح دستی حدود ۲۰ تا ۳۰ بیمار محلی، مدل را با آن‌ها fine-tune کنید. این بیماران نباید در ارزیابی عملکرد سگمنت استفاده شوند.
 
-### ۲-ب) سگمنت‌کردن نیمه‌خودکار
+### ۲-ب) حذف جذب فیزیولوژیک با TotalSegmentator
 ```bash
-python -m pipeline.step2_segment_lesions --threshold 3 --min-volume 0.5
-# آستانهٔ وابسته به کبد (مشابه معیار VISION):
-python -m pipeline.step2_segment_lesions --threshold 3 --liver-factor 1.0
+TotalSegmentator -i data/nifti/<pid>/CT.nii.gz -o data/totalseg/<pid>
+TotalSegmentator -i data/nifti/<pid>/CT.nii.gz -o data/totalseg/<pid> --task head_glands_cavities
+python -m pipeline.step2_segment_lesions --method nnunet
 ```
-| پارامتر | پیش‌فرض | توضیح |
+- غدد بزاقی، کلیه، طحال، روده و مثانه حذف می‌شوند.
+- داخل کبد فقط جذب بالاتر از SUVmean کبد + ۳SD حفظ می‌شود تا متاستاز کبدی از دست نرود.
+- غدد اشکی در TotalSegmentator نیستند و باید دستی حذف شوند.
+- حالت `--method threshold` (SUV ≥ 3) فقط برای تست، یا تا زمانی است که مدل nnU-Net آماده شود.
+
+### ۲-ج) اصلاح دستی (3D Slicer)
+| فایل | چه کسی | توضیح |
 |---|---|---|
-| `--threshold` | 3.0 | آستانهٔ ثابت SUV (Seifert et al., JNM 2020) |
-| `--liver-factor` | – | آستانه برابر می‌شود با max(threshold, k × SUVmean کبد) |
-| `--min-volume` | 0.5 mL | ضایعات کوچک‌تر حذف می‌شوند |
-| `--organ-margin` | 5 mm | حاشیهٔ اطراف ارگان‌ها که حذف می‌شود |
-
-داخل کبد از آستانهٔ تطبیقی (SUVmean کبد + ۳SD) استفاده می‌شود تا متاستازهای کبدی حذف نشوند.
-
-### ۲-ج) بازبینی دستی (اجباری)
-1. در **3D Slicer** فایل‌های `PET_SUV.nii.gz` و `CT.nii.gz` و `tumor_mask.nii.gz` را (به‌صورت Segmentation) باز کنید.
-2. پزشک متخصص طب هسته‌ای این موارد را اصلاح می‌کند: حذف جذب فیزیولوژیک باقی‌مانده (گانگلیون‌ها، حالب، روده)، اضافه‌کردن ضایعات جاافتاده، و جداکردن ضایعات چسبیده به مثانه.
-3. ماسک اصلاح‌شده را با نام **`data/masks/<pid>/tumor_mask_reviewed.nii.gz`** ذخیره کنید. مراحل بعدی به‌طور خودکار از همین فایل استفاده می‌کنند.
-
-> 📌 **برای مقاله:** برای ۲۰ تا ۳۰ بیمار، سگمنت‌کردن را دو نفر به‌صورت مستقل انجام دهند (یا یک نفر دو بار به فاصلهٔ چند هفته). سپس با ICC ویژگی‌های پایدار (ICC بالای ۰٫۷۵) را انتخاب کنید. این کار امتیاز RQS را بالا می‌برد و داوران معمولاً آن را می‌خواهند.
-
----
-
-## قدم ۳: پارامترهای مرسوم PET (مدل پایهٔ مقایسه)
+| `tumor_mask_auto.nii.gz` | خروجی خودکار | برای sensitivity analysis («automated instead of corrected masks») |
+| `tumor_mask_reader1.nii.gz` | Reader 1 + بازبینی پزشک ارشد | **تحلیل اصلی**، برای همهٔ بیماران |
+| `tumor_mask_reader2.nii.gz` | Reader 2، مستقل | فقط ۳۰ بیمار تصادفی؛ **از ماسک auto شروع کند، نه از ماسک Reader 1** |
 
 ```bash
-python -m pipeline.step3_conventional_metrics
+python tools/select_icc_subset.py --n 30 --seed 2026     # فهرست در results/icc_subset.txt
 ```
-- **سطح بیمار:** SUVmax، SUVpeak (کرهٔ ۱ میلی‌لیتری)، SUVmean، PSMA-TV، TL-PSMA، تعداد ضایعات، SUVmean کبد، نسبت تومور به کبد
-- **سطح ضایعه:** همین شاخص‌ها برای هر ضایعه، به‌همراه مختصات مرکز آن
-
-> مدل رادیومیکس شما باید نشان دهد که **فراتر از** SUVmean و PSMA-TV اطلاعات اضافه دارد. این شاخص‌ها در مطالعات بزرگ (مثل VISION و TheraP) پیش‌بینی‌کنندهٔ پاسخ بوده‌اند، پس مدل پایه و مرجع مقایسه همین‌ها هستند.
+هر دو Reader باید نسبت به داده‌های پیامد blind باشند.
 
 ---
 
-## قدم ۴: استخراج ویژگی‌های رادیومیکس
+## قدم ۳: پارامترهای مرسوم PET
 
 ```bash
-python -m pipeline.step4_extract_radiomics                          # PET، کل‌بدن و تک‌ضایعه
-python -m pipeline.step4_extract_radiomics --modalities PET CT      # به‌همراه CT
-python -m pipeline.step4_extract_radiomics --lesion-min-volume 1.0
+python -m pipeline.step3_conventional_metrics --mask reader1
 ```
-
-### تنظیمات (در `configs/pet_params.yaml` و `configs/ct_params.yaml`)
-| تنظیم | PET | CT | دلیل |
-|---|---|---|---|
-| Resampling | 4×4×4 mm (B-spline) | 1×1×1 mm | ایزوتروپیک بودن طبق IBSI |
-| Discretisation | Fixed bin width = 0.5 SUV | 25 HU | حفظ معنای فیزیکی شدت |
-| Re-segmentation | SUV ≥ 0 | −1000 تا 3000 HU | حذف آرتیفکت درون‌یابی |
-| فیلترها | Original + LoG (σ = 2، 4، 6 mm) + Wavelet | Original + LoG + Wavelet | |
-| کلاس‌ها | shape، firstorder، GLCM، GLRLM، GLSZM، GLDM، NGTDM | | |
-
-برای هر مدالیته و هر VOI حدود **۱۱۳۰ ویژگی** استخراج می‌شود.
-
-### دو سطح تحلیل
-- **کل‌بدن (wholebody):** همهٔ ضایعات یک VOI در نظر گرفته می‌شوند. این سطح فنوتیپ کل بار تومور را نشان می‌دهد. ویژگی‌های shape در این حالت معنای هندسی ندارند و بهتر است حذف شوند.
-- **تک‌ضایعه (lesion):** هر ضایعه جداگانه تحلیل می‌شود. این سطح برای بررسی ناهمگونی بین ضایعات و تحلیل داغ‌ترین یا بزرگ‌ترین ضایعه لازم است. ضایعات کوچک‌تر از ۱ mL ویژگی بافتی قابل‌اعتمادی ندارند و حذف می‌شوند.
-
-> 📌 **تحلیل حساسیت:** `binWidth` را با ۰٫۲۵ و ۱٫۰ هم امتحان کنید و ویژگی‌هایی را که به این پارامتر حساس‌اند گزارش کنید.
+- **مدل مرجع** (ثابت در پروپوزال): `suvmean` کل‌بدن و `psma_tv_ml` از این قدم؛ LDH و Hb از CRF.
+- **متغیرهای توصیفی:** `suvmax`، `suvpeak`، `tl_psma`، `n_lesions`، `tumor_to_liver_ratio`.
 
 ---
 
-## قدم ۵: ساخت دیتاست نهایی
-
-فایل `data/clinical.csv` را بسازید (نام ستون‌ها باید دقیقاً همین باشد):
-```csv
-patient_id,age,psa_baseline,psa_followup,ldh,alp,hb,prior_docetaxel,prior_arpi,ecog
-RLT001,71,85.0,20.1,210,140,12.1,1,1,1
-```
-- `psa_followup`: PSA در هفتهٔ ۱۲ (یا بعد از دو سیکل). نقطهٔ زمانی را ثابت نگه دارید و در Methods گزارش کنید.
-- برچسب پاسخ طبق **PCWG3** به این صورت محاسبه می‌شود: `psa50_response = 1` اگر PSA حداقل ۵۰٪ کاهش یافته باشد.
+## قدم ۴: استخراج رادیومیکس (IBSI)
 
 ```bash
-python -m pipeline.step5_build_dataset
+python -m pipeline.step4_extract_radiomics --mask reader1                  # تحلیل اصلی
+python -m pipeline.step4_extract_radiomics --mask reader2                  # برای ICC
+python -m pipeline.step4_extract_radiomics --mask reader1 --bin-width 0.25 # sensitivity
+python -m pipeline.step4_extract_radiomics --mask reader1 --bin-width 1.0  # sensitivity
+python -m pipeline.step4_extract_radiomics --mask auto                     # sensitivity
 ```
-خروجی `results/patient_level_dataset.csv` برای هر بیمار یک سطر دارد و شامل این ستون‌هاست:
-بالینی، مرسوم PET، ناهمگونی (`het_`)، رادیومیکس کل‌بدن (`wbpet_`، `wbct_`)، داغ‌ترین ضایعه (`hot_`) و بزرگ‌ترین ضایعه (`big_`).
+| تنظیم | مقدار | منبع |
+|---|---|---|
+| کلاس‌ها | shape، first-order، GLCM، GLRLM، GLSZM، GLDM، NGTDM | پروپوزال |
+| تصویر | فقط Original (۱۰۷ ویژگی برای هر VOI) | پروپوزال؛ فیلترهای LoG و Wavelet پیش‌ثبت نشده‌اند |
+| Discretisation | Fixed bin width = 0.5 SUV (و 0.25 و 1.0 در sensitivity) | پروپوزال |
+| Resampling | ایزوتروپیک ۴ mm (B-spline) | ⚠️ **در پروپوزال مشخص نیست و باید پیش از ثبت OSF تعیین شود** |
+| Texture | فقط برای ضایعات با حداقل ۶۴ وکسل بعد از resampling | پروپوزال |
+
+> ⚠️ **تصمیم لازم دربارهٔ اندازهٔ وکسل:** معیار ۶۴ وکسل به اندازهٔ وکسل وابسته است. با ۴ mm حداقل حجم ضایعه برای texture حدود ۴٫۱ mL است، با ۳ mm حدود ۱٫۷ mL و با ۲ mm حدود ۰٫۵ mL. اندازهٔ وکسل native اسکنرهای هر دو مرکز را از `acquisition_info.csv` ببینید و با اساتید راهنما یک مقدار ثابت انتخاب کنید (فایل `configs/pet_params.yaml`).
+
+پیشنهاد METRICS: تنظیمات را روی **IBSI digital phantom** هم اجرا کنید و با مقادیر مرجع IBSI مقایسه کنید (پروپوزال: «settings verified against IBSI reference values»).
 
 ---
 
-## چک‌لیست کیفیت برای مقاله
-- [ ] گزارش همهٔ تنظیمات استخراج طبق **IBSI** (resampling، bin width، فیلترها، نسخهٔ PyRadiomics)
-- [ ] تکرارپذیری سگمنت‌کردن با ICC
-- [ ] هارمونیزه‌سازی ComBat در صورت وجود چند اسکنر یا چند مرکز
-- [ ] رعایت **RQS** و **CLAIM** و **TRIPOD+AI**
-- [ ] تقسیم train/test **قبل از** هر نوع انتخاب ویژگی (جلوگیری از data leakage)
-- [ ] مقایسه با مدل پایه (پارامترهای بالینی و مرسوم PET)
+## قدم ۵: تجمیع در سطح بیمار
 
-## قدم‌های بعدی (فاز ۲: مدل‌سازی)
-1. حذف ویژگی‌های با واریانس نزدیک صفر، ICC پایین، یا همبستگی بیشتر از ۰٫۹
-2. انتخاب ویژگی داخل cross-validation (LASSO، mRMR، Boruta)
-3. مدل‌ها: Logistic regression، Random Forest، XGBoost و SVM؛ با nested CV
-4. ارزیابی: AUC با CI، calibration، decision curve analysis، تحلیل SHAP
-5. پیش‌بینی بقا (PFS/OS) با Cox-LASSO و Random Survival Forest
-6. در صورت امکان، افزودن SPECT/CT پس از سیکل اول (دوزیمتری) یا پیاده‌سازی رویکرد deep learning
+```bash
+python -m pipeline.step5_build_dataset --mask reader1
+python -m pipeline.step5_build_dataset --mask reader2
+```
+خروجی `results/<mask>/patient_features_pet_bw0.5.csv`:
+| پیشوند | روش تجمیع پیش‌تعریف‌شده |
+|---|---|
+| `wb_` | ویژگی‌های union کل‌بدن (first-order و texture) |
+| `vwm_` | میانگین وزنی حجمی بین ضایعات |
+| `sd_`، `range_` | پراکندگی بین ضایعات (ناهمگونی بین‌متاستازی)؛ برای بیمار تک‌ضایعه مقدار ندارد |
+
+در نتیجه حدود ۴۱۴ ویژگی رادیومیک به‌همراه پارامترهای مرسوم PET به دست می‌آید.
+
+---
+
+## قدم ۶: فیلتر تکرارپذیری (ICC)
+
+```bash
+python -m pipeline.step6_reproducibility --threshold 0.75
+```
+- ICC(2,1) با absolute agreement و single measure، به‌همراه 95% CI به روش McGraw & Wong. پیاده‌سازی با `pingouin` تطبیق داده شده است.
+- خروجی‌ها: `results/icc_pet_bw0.5.csv` و `results/reproducible_features_pet_bw0.5.txt`. فقط ویژگی‌های این فهرست وارد فاز مدل‌سازی می‌شوند.
+- ICC مربوط به SUVmean و PSMA-TV هم گزارش می‌شود، چون تکرارپذیری متغیرهای مدل مرجع هم مهم است.
+
+---
+
+## قدم ۷: endpointها از CRF
+
+ستون‌های `data/crf.csv` (تاریخ‌ها با فرمت YYYY-MM-DD؛ خانهٔ خالی یعنی رخ نداده):
+```
+patient_id, center, date_pet, date_cycle1, date_last_followup, date_death,
+date_progression, psa_baseline, psa_12w, recip_12w, ldh, hb, ...
+```
+- `date_progression`: **اولین** پیشرفت از هر نوع (PSA طبق PCWG3، رادیوگرافیک طبق RECIP 1.0 یا PCWG3، یا بالینی)، تعیین‌شده توسط ارزیاب blind.
+
+```bash
+python -m pipeline.step7_outcomes --data-lock 2027-06-30
+```
+| ستون | تعریف |
+|---|---|
+| `os_months`، `os_event` | از سیکل ۱ تا مرگ به هر علت |
+| `pfs_months`، `pfs_event` | از سیکل ۱ تا پیشرفت یا مرگ |
+| `response_12w` | کاهش PSA حداقل ۵۰٪ یا RECIP CR/PR در هفتهٔ ۱۲؛ مرگ یا پیشرفت قبل از هفتهٔ ۱۲ = عدم پاسخ |
+| `recur_months`، `recur_event` | فقط در پاسخ‌دهنده‌ها و از landmark هفتهٔ ۱۲: ‏0 = سانسور، 1 = عود، 2 = مرگ (competing) |
+| `eligible_pet_window`، `eligible_followup` | PET حداکثر ۸ هفته قبل از سیکل ۱؛ امکان پیگیری حداقل ۶ ماهه |
+| `temporal_set` | ۳۰٪ جدیدترین بیماران = `validation` (TRIPOD 2b) |
+
+---
+
+## ترتیب کار و پیش‌ثبت (Pre-registration)
+1. ✅ قدم‌های ۱ تا ۶ (تصویربرداری) و قدم ۷ (پیامدها) **جدا از هم** اجرا شوند.
+2. ⬜ **قبل از** پیوند ویژگی‌ها به پیامد، این موارد در OSF ثبت شوند: endpointها، predictorها، تنظیمات `configs/pet_params.yaml` (به‌ویژه اندازهٔ وکسل)، و تعداد پارامترهای مدل نهایی طبق معیار Riley بر اساس N واقعی.
+3. ⬜ فاز ۲، داخل resampling و بدون data leakage: ComBat (فقط اگر هر batch حداقل ۲۰ بیمار داشته باشد) ← حذف ویژگی‌های near-zero variance ← حذف از جفت‌های با |ρ| > 0.90 ← LASSO-Cox ← ساخت radiomic score ← مدل‌ها (Cox، RSF، XGBoost، SSVM و Fine-Gray) ← Uno C-index، tdAUC، calibration، DCA و bootstrap optimism ← SHAP، LIME، SurvSHAP(t) و SurvLIME.

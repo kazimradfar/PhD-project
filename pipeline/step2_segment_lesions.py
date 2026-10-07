@@ -1,23 +1,28 @@
-"""Step 2 - Semi-automatic whole-body tumour segmentation on PSMA PET.
+"""Step 2 - Automatic whole-body tumour segmentation on [68Ga]Ga-PSMA-11 PET.
 
-Method (common in Lu-PSMA response studies, e.g. Seifert et al. JNM 2020):
-  1. Threshold the SUV image (default SUV >= 3).
-  2. Optionally raise the threshold to k x liver SUVmean (--liver-factor).
-  3. Remove physiological PSMA uptake using organ masks from TotalSegmentator
-     (salivary glands, kidneys, spleen, bowel, bladder ...). Inside the liver an
-     adaptive threshold (liver SUVmean + 3 SD) is used so liver metastases are kept.
-  4. Keep 3D-connected components >= --min-volume mL.
+Two sources of the automatic mask (--method):
+  * nnunet    : prediction of the nnU-Net model trained on PSMA-PET-CT-Lesions (main method of
+                the proposal). Run nnU-Net first (see tools/prepare_nnunet_input.py) and put the
+                predictions in data/nnunet_pred/<pid>.nii.gz.
+  * threshold : SUV >= 3 (Seifert et al.) - fallback / for testing before nnU-Net is ready.
 
-The result MUST be reviewed and corrected by a nuclear-medicine physician
-(e.g. in 3D Slicer). Save the corrected mask as
-data/masks/<pid>/tumor_mask_reviewed.nii.gz - all later steps use it automatically.
+In both cases physiological PSMA uptake is removed with TotalSegmentator organ masks
+(salivary and lacrimal glands, kidneys, spleen, bowel, bladder). Inside the liver only
+uptake above liver SUVmean + 3 SD is kept, so liver metastases are not lost.
+Components smaller than --min-volume mL are dropped.
 
-Input : data/nifti/<pid>/PET_SUV.nii.gz, optional data/totalseg/<pid>/*.nii.gz
-Output: data/masks/<pid>/tumor_mask.nii.gz, lesions_label.nii.gz, liver_ref.nii.gz
-        results/segmentation_summary.csv
+Then (outside this script):
+  1. Reader 1 corrects every mask in 3D Slicer, a senior nuclear-medicine physician reviews
+     it -> save as data/masks/<pid>/tumor_mask_reader1.nii.gz  (main analysis)
+  2. Reader 2 independently corrects the auto masks of 30 random patients
+     (tools/select_icc_subset.py) -> data/masks/<pid>/tumor_mask_reader2.nii.gz
+
+Input : data/nifti/<pid>/PET_SUV.nii.gz, data/totalseg/<pid>/*.nii.gz, [data/nnunet_pred/<pid>.nii.gz]
+Output: data/masks/<pid>/tumor_mask_auto.nii.gz, liver_ref.nii.gz, results/segmentation_summary.csv
 
 Usage:
-    python -m pipeline.step2_segment_lesions --threshold 3 --min-volume 0.5
+    python -m pipeline.step2_segment_lesions --method nnunet
+    python -m pipeline.step2_segment_lesions --method threshold --threshold 3
 """
 
 from __future__ import annotations
@@ -29,14 +34,15 @@ import numpy as np
 import pandas as pd
 import SimpleITK as sitk
 
-from pipeline.common import (DATA_DIR, RESULTS_DIR, label_lesions, list_patients, log, resample_to_reference,
-                             setup_logging)
+from pipeline.common import (DATA_DIR, MASK_FILES, RESULTS_DIR, label_lesions, list_patients, log,
+                             resample_to_reference, setup_logging)
 
 # TotalSegmentator structure names with physiological PSMA uptake / excretion.
 # Salivary glands come from the "head_glands_cavities" task; the rest from the default "total" task.
 PHYSIOLOGICAL_ORGANS = [
     "kidney_left", "kidney_right", "spleen", "urinary_bladder", "small_bowel", "duodenum", "colon", "stomach",
     "parotid_gland_left", "parotid_gland_right", "submandibular_gland_left", "submandibular_gland_right",
+    "lacrimal_gland_left", "lacrimal_gland_right",  # only if your organ model provides them
 ]
 LIVER = "liver"
 
@@ -73,10 +79,17 @@ def segment_patient(pid: str, args) -> dict:
     if liver is not None:
         core, liver_mean, liver_sd = liver_reference(liver, pet)
         sitk.WriteImage(core, str(odir / "liver_ref.nii.gz"), useCompression=True)
-        if args.liver_factor:
+        if args.liver_factor and args.method == "threshold":
             threshold = max(threshold, args.liver_factor * liver_mean)
 
-    mask = pet >= threshold
+    if args.method == "nnunet":
+        pred_f = args.nnunet_dir / f"{pid}.nii.gz"
+        if not pred_f.exists():
+            raise FileNotFoundError(f"{pred_f} not found - run nnU-Net inference first")
+        pred = sitk.ReadImage(str(pred_f), sitk.sitkUInt8)
+        mask = resample_to_reference(pred, pet, is_mask=True) > 0
+    else:
+        mask = pet >= threshold
 
     excluded = []
     if tdir.exists():
@@ -89,19 +102,20 @@ def segment_patient(pid: str, args) -> dict:
             mask = mask & sitk.Not(om)
             excluded.append(organ)
         if liver is not None:
-            liver_thr = max(threshold, liver_mean + 3 * liver_sd)
-            mask = (mask & sitk.Not(liver)) | (liver & (pet >= liver_thr))
+            in_liver = mask & liver & (pet >= liver_mean + 3 * liver_sd)
+            mask = (mask & sitk.Not(liver)) | in_liver
     else:
         log.warning("%s: no TotalSegmentator masks - physiological uptake is NOT removed, review carefully", pid)
 
     labels, lesions = label_lesions(sitk.Cast(mask, sitk.sitkUInt8), pet, args.min_volume)
     tumor = sitk.Cast(labels > 0, sitk.sitkUInt8)
-    sitk.WriteImage(tumor, str(odir / "tumor_mask.nii.gz"), useCompression=True)
-    sitk.WriteImage(labels, str(odir / "lesions_label.nii.gz"), useCompression=True)
+    sitk.WriteImage(tumor, str(odir / MASK_FILES["auto"]), useCompression=True)
 
-    log.info("%s: threshold SUV %.2f, %d lesions, PSMA-TV %.1f mL", pid, threshold, len(lesions),
+    log.info("%s: %s, %d lesions, PSMA-TV %.1f mL", pid, args.method, len(lesions),
              sum(d["volume_ml"] for d in lesions))
-    return {"patient_id": pid, "threshold_suv": threshold, "liver_suvmean": liver_mean, "liver_suvsd": liver_sd,
+    return {"patient_id": pid, "method": args.method,
+            "threshold_suv": threshold if args.method == "threshold" else np.nan,
+            "liver_suvmean": liver_mean, "liver_suvsd": liver_sd,
             "n_lesions": len(lesions), "psma_tv_ml": sum(d["volume_ml"] for d in lesions),
             "excluded_organs": ";".join(excluded)}
 
@@ -111,9 +125,11 @@ def main() -> None:
     ap.add_argument("--nifti-dir", type=Path, default=DATA_DIR / "nifti")
     ap.add_argument("--totalseg-dir", type=Path, default=DATA_DIR / "totalseg")
     ap.add_argument("--mask-dir", type=Path, default=DATA_DIR / "masks")
+    ap.add_argument("--method", choices=["nnunet", "threshold"], default="nnunet")
+    ap.add_argument("--nnunet-dir", type=Path, default=DATA_DIR / "nnunet_pred")
     ap.add_argument("--threshold", type=float, default=3.0, help="fixed SUV threshold (default 3)")
     ap.add_argument("--liver-factor", type=float, default=None,
-                    help="optional: threshold = max(threshold, factor x liver SUVmean)")
+                    help="threshold method only: threshold = max(threshold, factor x liver SUVmean)")
     ap.add_argument("--min-volume", type=float, default=0.5, help="minimum lesion volume in mL (default 0.5)")
     ap.add_argument("--organ-margin", type=float, default=5.0, help="dilation of organ masks in mm (default 5)")
     ap.add_argument("--patients", nargs="*")

@@ -1,11 +1,11 @@
 # PyRadiomics settings for the low-dose CT of the PSMA PET/CT
-# Low-dose CT is noisy; CT radiomics here is exploratory (bone vs. soft-tissue lesions).
+# Low-dose CT is noisy and CT radiomics is not part of the pre-specified analysis -> exploratory only.
 
 imageType:
   Original: {}
-  LoG:
-    sigma: [1.0, 2.0, 3.0]
-  Wavelet: {}
+  # LoG:
+  #   sigma: [1.0, 2.0, 3.0]
+  # Wavelet: {}
 
 featureClass:
   shape:

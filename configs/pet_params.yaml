@@ -1,12 +1,16 @@
-# PyRadiomics settings for PSMA PET (SUVbw images)
+# PyRadiomics settings for [68Ga]Ga-PSMA-11 PET (SUVbw images)
 # Reference: IBSI (Zwanenburg et al., Radiology 2020); PyRadiomics docs.
-# Report every setting below in the Methods section of your paper.
+# These settings are part of the pre-registered analysis plan - fix them before
+# linking features to outcomes and report every one in the Methods section.
 
 imageType:
+  # Proposal: shape, first-order and texture features of the original image only.
+  # Filtered images multiply the feature space (~1100 instead of ~107 per VOI) and are
+  # NOT pre-specified; enable only as an explicitly labelled exploratory analysis.
   Original: {}
-  LoG:
-    sigma: [2.0, 4.0, 6.0]        # mm; must be >= voxel size after resampling
-  Wavelet: {}
+  # LoG:
+  #   sigma: [2.0, 4.0, 6.0]      # mm; must be >= voxel size after resampling
+  # Wavelet: {}
 
 featureClass:
   shape:
@@ -22,7 +26,9 @@ setting:
   # PSMA lesions reach SUV 50-100, so 0.5 SUV gives a reasonable number of bins.
   # Test 0.25 / 0.5 / 1.0 in a sensitivity analysis.
   binWidth: 0.5
-  # Isotropic resampling (IBSI) - choose close to the native PET voxel size.
+  # Isotropic resampling (IBSI) - choose close to the native PET voxel size of BOTH centres
+  # and fix it before the analysis. It also sets the size limit for texture features
+  # (>= 64 voxels): 4 mm -> 4.1 mL, 3 mm -> 1.7 mL, 2 mm -> 0.5 mL.
   resampledPixelSpacing: [4.0, 4.0, 4.0]
   interpolator: sitkBSpline
   padDistance: 10
@@ -31,7 +37,7 @@ setting:
   resegmentMode: absolute
   label: 1
   minimumROIDimensions: 3
-  minimumROISize: 8               # voxels after resampling (~0.5 mL at 4 mm)
+  minimumROISize: 8               # voxels after resampling; texture needs >= 64 (step 4 option)
   normalize: false
   correctMask: true
   geometryTolerance: 0.001

@@ -100,21 +100,38 @@ def write_series(folder: Path, vol, spacing, modality, study_uid, info):
         ds.save_as(folder / f"{modality}_{k:04d}.dcm", enforce_file_format=True)
 
 
+def synthetic_crf(rng, pid, pet_dt):
+    d = lambda days: (pet_dt + timedelta(days=int(days))).strftime("%Y-%m-%d")  # noqa: E731
+    cycle1 = rng.integers(7, 40)
+    psa0 = float(rng.uniform(20, 300))
+    psa12 = psa0 * float(rng.uniform(0.1, 1.6))
+    prog = cycle1 + rng.integers(60, 400)
+    death = prog + rng.integers(60, 300) if rng.random() < 0.6 else None
+    last = death if death else prog + rng.integers(30, 200)
+    return {"patient_id": pid, "center": rng.choice(["IKH", "SH"]), "date_pet": d(0), "date_cycle1": d(cycle1),
+            "date_last_followup": d(last), "date_death": d(death) if death else "",
+            "date_progression": d(prog) if rng.random() < 0.85 else "", "psa_baseline": round(psa0, 1),
+            "psa_12w": round(psa12, 1), "recip_12w": rng.choice(["PR", "SD", "PD", ""]),
+            "ldh": int(rng.uniform(150, 500)), "hb": round(float(rng.uniform(9, 14)), 1)}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=3)
     ap.add_argument("--out", type=Path, default=Path("data/raw"))
     ap.add_argument("--totalseg", type=Path, default=Path("data/totalseg"),
                     help="also write synthetic organ masks here")
+    ap.add_argument("--crf", type=Path, default=Path("data/crf.csv"), help="also write a synthetic CRF here")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
     rng = np.random.default_rng(args.seed)
 
     shape, spacing = (40, 64, 64), (4.0, 4.0, 4.0)  # (z,y,x) voxels; (x,y,z) mm
+    crf = []
     for i in range(args.n):
         pid = f"SYN{i + 1:03d}"
         weight, dose = float(rng.uniform(65, 95)), float(rng.uniform(120e6, 180e6))
-        inj = datetime(2026, 1, 10, 9, 0, 0)
+        inj = datetime(2024, 1, 10, 9, 0, 0) + timedelta(days=int(rng.integers(0, 600)))
         scan = inj + timedelta(minutes=float(rng.uniform(55, 70)))
         info = dict(pid=pid, weight=weight, dose=dose, inj=inj, scan=scan)
         suv, hu, organs = phantom(rng, shape)
@@ -130,7 +147,13 @@ def main():
                 img = sitk.GetImageFromArray(m.astype(np.uint8))
                 img.SetSpacing(spacing)
                 sitk.WriteImage(img, str(tdir / f"{name}.nii.gz"))
+        crf.append(synthetic_crf(rng, pid, scan))
         print(f"{pid}: weight {weight:.0f} kg, {dose / 1e6:.0f} MBq, uptake {(scan - inj).seconds / 60:.0f} min")
+
+    if args.crf:
+        import pandas as pd
+        pd.DataFrame(crf).to_csv(args.crf, index=False)
+        print(f"Synthetic CRF -> {args.crf}")
 
 
 if __name__ == "__main__":

@@ -2,15 +2,17 @@
 
 Every radiomics model must be compared against these simple, established predictors.
 
-Patient level : SUVmax, SUVpeak, SUVmean, PSMA-TV (mL), TL-PSMA (= PSMA-TV x SUVmean),
-                number of lesions, liver SUVmean, SUVmean/liver ratio (VISION-like criterion).
+Reference model (fixed in the proposal): whole-body SUVmean + PSMA-TV (+ LDH, Hb from the CRF).
+Descriptive: SUVmax, SUVpeak, TL-PSMA (= PSMA-TV x SUVmean), number of lesions, liver SUVmean,
+                tumour-to-liver ratio.
 Lesion level  : SUVmax, SUVpeak, SUVmean, volume, TL-PSMA, centroid.
 
-Input : data/nifti/<pid>/PET_SUV.nii.gz, data/masks/<pid>/tumor_mask[_reviewed].nii.gz
-Output: results/conventional_patient.csv, results/conventional_lesion.csv
+Input : data/nifti/<pid>/PET_SUV.nii.gz, data/masks/<pid>/tumor_mask_<mask>.nii.gz
+Output: results/<mask>/conventional_patient.csv, results/<mask>/conventional_lesion.csv
 
 Usage:
-    python -m pipeline.step3_conventional_metrics
+    python -m pipeline.step3_conventional_metrics                  # reader1 (main analysis)
+    python -m pipeline.step3_conventional_metrics --mask auto      # sensitivity: uncorrected masks
 """
 
 from __future__ import annotations
@@ -23,8 +25,8 @@ import pandas as pd
 import SimpleITK as sitk
 from scipy import ndimage
 
-from pipeline.common import (DATA_DIR, RESULTS_DIR, label_lesions, list_patients, load_tumor_mask, log,
-                             setup_logging, voxel_volume_ml)
+from pipeline.common import (DATA_DIR, MASK_FILES, label_lesions, list_patients, load_tumor_mask, log,
+                             results_dir, setup_logging, voxel_volume_ml)
 
 
 def suvpeak_map(pet: sitk.Image, volume_ml: float = 1.0) -> np.ndarray:
@@ -40,7 +42,7 @@ def suvpeak_map(pet: sitk.Image, volume_ml: float = 1.0) -> np.ndarray:
 
 def patient_metrics(pid: str, args) -> tuple[dict, list[dict]]:
     pet = sitk.ReadImage(str(args.nifti_dir / pid / "PET_SUV.nii.gz"), sitk.sitkFloat32)
-    mask, mask_name = load_tumor_mask(args.mask_dir / pid)
+    mask = load_tumor_mask(args.mask_dir / pid, args.mask)
     labels, lesions = label_lesions(mask, pet)
 
     pet_arr = sitk.GetArrayViewFromImage(pet)
@@ -56,7 +58,7 @@ def patient_metrics(pid: str, args) -> tuple[dict, list[dict]]:
 
     tumor = lab_arr > 0
     vals = pet_arr[tumor]
-    row = {"patient_id": pid, "mask_used": mask_name, "n_lesions": len(lesions)}
+    row = {"patient_id": pid, "n_lesions": len(lesions)}
     if vals.size:
         row.update({
             "suvmax": float(vals.max()),
@@ -71,7 +73,7 @@ def patient_metrics(pid: str, args) -> tuple[dict, list[dict]]:
         liver = sitk.GetArrayViewFromImage(sitk.ReadImage(str(liver_f))) > 0
         row["liver_suvmean"] = float(pet_arr[liver].mean())
         if vals.size:
-            row["suvmean_to_liver"] = row["suvmean"] / row["liver_suvmean"]
+            row["tumor_to_liver_ratio"] = row["suvmean"] / row["liver_suvmean"]
             row["frac_lesions_below_liver"] = float(np.mean([d["suvmax"] < row["liver_suvmean"] for d in lesions]))
 
     log.info("%s: %d lesions, SUVmax %.1f, PSMA-TV %.1f mL, TL-PSMA %.0f", pid, len(lesions),
@@ -83,12 +85,16 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--nifti-dir", type=Path, default=DATA_DIR / "nifti")
     ap.add_argument("--mask-dir", type=Path, default=DATA_DIR / "masks")
+    ap.add_argument("--mask", choices=list(MASK_FILES), default="reader1")
     ap.add_argument("--patients", nargs="*")
     args = ap.parse_args()
     setup_logging()
 
     patients, lesions = [], []
     for pid in args.patients or list_patients(args.mask_dir):
+        if not (args.mask_dir / pid / MASK_FILES[args.mask]).exists():
+            log.warning("%s: no %s mask, skipped", pid, args.mask)
+            continue
         try:
             row, les = patient_metrics(pid, args)
             patients.append(row)
@@ -96,14 +102,14 @@ def main() -> None:
         except Exception as exc:
             log.error("%s: FAILED - %s", pid, exc)
 
-    RESULTS_DIR.mkdir(exist_ok=True)
-    pd.DataFrame(patients).to_csv(RESULTS_DIR / "conventional_patient.csv", index=False)
+    out_dir = results_dir(args.mask)
+    pd.DataFrame(patients).to_csv(out_dir / "conventional_patient.csv", index=False)
     les_df = pd.DataFrame(lesions)
     if not les_df.empty:
         les_df[["cx_mm", "cy_mm", "cz_mm"]] = pd.DataFrame(les_df.pop("centroid_mm").tolist(), index=les_df.index)
         les_df = les_df[["patient_id", "lesion_id"] + [c for c in les_df if c not in ("patient_id", "lesion_id")]]
-    les_df.to_csv(RESULTS_DIR / "conventional_lesion.csv", index=False)
-    log.info("Wrote results/conventional_patient.csv and results/conventional_lesion.csv")
+    les_df.to_csv(out_dir / "conventional_lesion.csv", index=False)
+    log.info("Wrote %s/conventional_patient.csv and conventional_lesion.csv (%d patients)", out_dir, len(patients))
 
 
 if __name__ == "__main__":
