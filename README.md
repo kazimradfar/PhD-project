@@ -229,6 +229,8 @@ python -m pipeline.step13_explain --endpoint os
 Rscript R/recurrence_competing_risks.R
 ```
 
+**نصب و دموی یک‌کلیکی در ویندوز:** روی فایل `setup_windows.bat` دوبار کلیک کنید. محیط `.venv` را می‌سازد، کتابخانه‌ها را نصب می‌کند و دموی فاز ۲ را اجرا می‌کند.
+
 **دموی فاز ۲ (بدون تصویر، با ۲۲۰ بیمار مصنوعی، حدود ۵ دقیقه):**
 ```bash
 python tools/run_demo.py --clean
