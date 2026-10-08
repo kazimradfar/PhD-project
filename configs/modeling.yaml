@@ -1,0 +1,53 @@
+# Phase 2: modelling settings (steps 8-13).
+# Everything in this file must be fixed and registered on OSF BEFORE outcomes are linked to the
+# imaging features. Changing a value after seeing results is selective analysis.
+
+random_seed: 2026
+
+# Imaging features from phase 1 (main analysis = reader 1 masks, bin width 0.5 SUV)
+mask: reader1
+feature_tag: pet_bw0.5
+radiomic_prefixes: [wb_, vwm_, sd_, range_]
+
+# Reference model (proposal, Variables section): fixed before the analysis.
+# The radiomic features are evaluated against / on top of these four variables.
+reference_predictors: [suvmean, psma_tv_ml, ldh, hb]
+# If a reference variable has more than this fraction missing, it is replaced by the backup variable
+# (proposal, Data analysis: missing data). The CRF needs a 'date_diagnosis' column for this.
+max_missing_fraction: 0.30
+backup_predictor: time_since_diagnosis_months
+
+# Log-transformed before modelling (right-skewed variables).
+# DECISION NEEDED before OSF registration: the proposal does not specify this. Discuss with supervisors.
+log_transform: [psma_tv_ml, ldh]
+
+# ComBat batch variable ('scanner' or 'center'); harmonization only if every batch has >= 20 patients
+batch_column: scanner
+min_batch_size: 20
+
+# Endpoints analysed in Python (recurrence with competing risks is analysed in R, see R/)
+endpoints: [os, pfs, response]
+predictor_sets: [reference, radiomics, combined]
+survival_models: [coxnet, rsf, xgb, svm]
+binary_models: [logistic, rf, xgb, svm]
+
+# Feature reduction inside every training fold
+corr_threshold: 0.90
+lasso_alpha: 0.15
+
+# Validation
+outer_folds: 5
+inner_folds: 5
+cv_repeats: 10          # repeated nested CV
+n_bootstrap: 200        # optimism correction and confidence intervals
+truncation_months: 24   # Uno's C truncated at 24 months
+td_auc_months: [6, 12, 18]
+dca_month: 12
+delta_c_min: 0.03       # prespecified clinically meaningful gain (H2)
+
+# Explainability (H3)
+h3_min_selection_frequency: 0.70
+# Expected direction of effect on RISK (+1 = higher value -> higher risk of the event)
+expected_directions:
+  suvmean: -1
+  psma_tv_ml: 1

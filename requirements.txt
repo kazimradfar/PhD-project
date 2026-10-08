@@ -16,6 +16,13 @@ pyradiomics>=3.1
 # Optional: automatic organ segmentation on CT (physiological-uptake exclusion, liver reference)
 # TotalSegmentator>=2.4
 
+# Phase 2: modelling, validation, explainability
+scikit-learn>=1.3
+scikit-survival>=0.22
+xgboost>=2.0
+shap>=0.44
+pytest>=7
+
 # Learning / visual checks (notebooks/explore_results.ipynb)
 matplotlib>=3.7
 jupyterlab>=4.0

@@ -12,7 +12,7 @@ DICOM ─► ① SUV ─► ② nnU-Net + حذف جذب فیزیولوژیک ─
       ─► ③ پارامترهای مرسوم PET ─► ④ رادیومیکس IBSI ─► ⑤ تجمیع در سطح بیمار ─► ⑥ فیلتر ICC ≥ 0.75
 CRF ─► ⑦ endpointها: OS، PFS، پاسخ ۱۲ هفته، recurrence (competing risk) + تقسیم temporal
                                        ↓
-                        فاز ۲: ComBat، انتخاب ویژگی، مدل‌سازی (بعد از ثبت OSF)
+                        فاز ۲ (قدم‌های ۸ تا ۱۳، بعد از ثبت OSF): H1 ← مدل‌ها ← اعتبارسنجی ← H2 ← H3
 ```
 
 | مرحله | اسکریپت | مطابق پروپوزال |
@@ -201,4 +201,41 @@ python -m pipeline.step7_outcomes --data-lock 2027-06-30
 ## ترتیب کار و پیش‌ثبت (Pre-registration)
 1. ✅ قدم‌های ۱ تا ۶ (تصویربرداری) و قدم ۷ (پیامدها) **جدا از هم** اجرا شوند.
 2. ⬜ **قبل از** پیوند ویژگی‌ها به پیامد، این موارد در OSF ثبت شوند: endpointها، predictorها، تنظیمات `configs/pet_params.yaml` (به‌ویژه اندازهٔ وکسل)، و تعداد پارامترهای مدل نهایی طبق معیار Riley بر اساس N واقعی.
-3. ⬜ فاز ۲، داخل resampling و بدون data leakage: ComBat (فقط اگر هر batch حداقل ۲۰ بیمار داشته باشد) ← حذف ویژگی‌های near-zero variance ← حذف از جفت‌های با |ρ| > 0.90 ← LASSO-Cox ← ساخت radiomic score ← مدل‌ها (Cox، RSF، XGBoost، SSVM و Fine-Gray) ← Uno C-index، tdAUC، calibration، DCA و bootstrap optimism ← SHAP، LIME، SurvSHAP(t) و SurvLIME.
+3. ⬜ فاز ۲ (قدم‌های ۸ تا ۱۳ در ادامه): همهٔ پیش‌پردازش‌ها (imputation، ComBat، حذف ویژگی‌های هم‌بسته، LASSO) داخل هر fold و هر نمونهٔ bootstrap دوباره fit می‌شوند تا data leakage رخ ندهد.
+
+---
+
+## فاز ۲: ارزیابی ارزش ویژگی‌های رادیومیکس (قدم‌های ۸ تا ۱۳)
+
+هدف اصلی پروژه این است که ارزش پیش‌بینی ویژگی‌های رادیومیکس برای پاسخ درمانی، OS، PFS و عود سنجیده شود. همهٔ قدم‌های این فاز فقط ابزار رسیدن به همین هدف‌اند. تنظیمات در `configs/modeling.yaml` است و **باید قبل از ثبت OSF نهایی شود**.
+
+| قدم | اسکریپت | چه چیزی را نشان می‌دهد |
+|---|---|---|
+| ۸ | `pipeline/step8_analysis_table.py` | جدول تحلیل: ویژگی‌های تکرارپذیر + ۴ متغیر مدل مرجع + endpointها؛ قاعدهٔ دادهٔ گم‌شده (>۳۰٪ ← زمان از تشخیص)؛ تعداد پارامترها در برابر محاسبهٔ Riley |
+| ۹ | `pipeline/step9_univariable.py` | **H1 (هدف اختصاصی ۱):** ارتباط تک‌تک ویژگی‌ها با OS، PFS، عود (cause-specific) و پاسخ اولیه، با FDR بنجامینی–هوخبرگ |
+| ۱۰ | `pipeline/step10_models.py` | **هدف اختصاصی ۲:** nested CV تکرارشونده برای Cox-LASSO، RSF، XGBoost و SVM با سه گروه پیش‌بین: مرجع، فقط رادیومیکس، ترکیبی |
+| ۱۱ | `pipeline/step11_validation.py` | bootstrap optimism کل pipeline، اعتبارسنجی temporal (۷۰/۳۰) و leave-one-center-out |
+| ۱۲ | `pipeline/step12_incremental_value.py` | **H2 و هدف اختصاصی ۳:** ΔC اصلاح‌شده با CI، آزمون LRT، decision curve در ماه ۱۲، ΔAUC برای پاسخ اولیه؛ خروجی برای R |
+| ۱۳ | `pipeline/step13_explain.py` | **H3:** SHAP، مهم‌ترین ویژگی‌های رادیومیکس، پایداری انتخاب (≥۷۰٪ bootstrap) و جهت اثر مورد انتظار |
+| R | `R/recurrence_competing_risks.R` | عود با مرگ به‌عنوان رویداد رقیب: Fine–Gray، cause-specific Cox و competing-risk RSF |
+
+```bash
+python -m pipeline.step8_analysis_table
+python -m pipeline.step9_univariable
+python -m pipeline.step10_models                    # کامل: چند ساعت؛ برای تست: --quick
+python -m pipeline.step11_validation --endpoint os --model coxnet
+python -m pipeline.step12_incremental_value
+python -m pipeline.step13_explain --endpoint os
+Rscript R/recurrence_competing_risks.R
+```
+
+**دموی فاز ۲ (بدون تصویر، با ۲۲۰ بیمار مصنوعی، حدود ۵ دقیقه):**
+```bash
+python tools/run_demo.py --clean
+python tools/run_demo.py --phase2
+```
+
+> ⚠️ **تصمیم لازم:** تبدیل لگاریتمی PSMA-TV و LDH (`log_transform` در `configs/modeling.yaml`) در پروپوزال مشخص نشده است. قبل از ثبت OSF با اساتید راهنما تصمیم بگیرید.
+
+تست‌ها: `python -m pytest tests -q`
+
