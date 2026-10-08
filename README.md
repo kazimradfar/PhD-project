@@ -41,8 +41,8 @@ git clone https://github.com/kazimradfar/PhD-project.git && cd PhD-project
 python -m venv .venv && source .venv/bin/activate      # در ویندوز: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
-> اگر `pyradiomics` روی پایتون ۳.۱۲ یا جدیدتر نصب نشد، از Python 3.10 یا 3.11 استفاده کنید، یا:
-> `pip install docopt-ng pykwalify && pip install --no-deps "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git"`
+> `pyradiomics` در `requirements.txt` نیست، چون نصبش اغلب خطا می‌دهد و نباید جلوی نصب بقیه را بگیرد. فقط برای فاز ۱ (قدم ۴) لازم است و فاز ۲ بدون آن کار می‌کند. روش نصب جداگانه در `requirements-radiomics.txt` آمده است:
+> `pip install docopt-ng pykwalify` و بعد `pip install --no-deps "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git"`
 
 **تست کامل pipeline** (حدود یک دقیقه):
 ```bash

@@ -7,11 +7,9 @@ pydicom>=2.4
 PyYAML>=6.0
 PyWavelets>=1.4
 
-# Radiomics (IBSI-compliant feature extraction)
-# On Python >= 3.12 the PyPI release may fail to build; install from GitHub instead:
-#   pip install docopt-ng pykwalify
-#   pip install --no-deps "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git"
-pyradiomics>=3.1
+# Radiomics (PyRadiomics) is NOT in this file, because its installation often fails (Windows,
+# Python >= 3.12) and would block everything else. It is only needed for phase 1 (step 4).
+# Install it separately:  see requirements-radiomics.txt
 
 # Optional: automatic organ segmentation on CT (physiological-uptake exclusion, liver reference)
 # TotalSegmentator>=2.4

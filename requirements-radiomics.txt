@@ -1,0 +1,9 @@
+# PyRadiomics: needed only for phase 1, step 4 (feature extraction). Phase 2 (steps 8-13) works without it.
+#
+# The PyPI release (3.1.0) often fails with "inconsistent version" or a build error. Install from GitHub:
+#   pip install docopt-ng pykwalify
+#   pip install --no-deps "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git"
+# On Windows this compiles C code: if it fails with "Microsoft Visual C++ 14.0 or greater is required",
+# install "Build Tools for Visual Studio" (Desktop development with C++) and run the two lines again.
+docopt-ng
+pykwalify
