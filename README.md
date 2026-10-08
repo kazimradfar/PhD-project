@@ -239,5 +239,7 @@ python tools/run_demo.py --phase2
 
 > ⚠️ **تصمیم لازم:** تبدیل لگاریتمی PSMA-TV و LDH (`log_transform` در `configs/modeling.yaml`) در پروپوزال مشخص نشده است. قبل از ثبت OSF با اساتید راهنما تصمیم بگیرید.
 
+نتایج فاز ۲ را در `notebooks/phase2_results.ipynb` ببینید (نمودار مقایسهٔ مدل‌ها، H1، H2، decision curve و SHAP). `notebooks/explore_results.ipynb` مربوط به فاز ۱ و تصاویر است.
+
 تست‌ها: `python -m pytest tests -q`
 
