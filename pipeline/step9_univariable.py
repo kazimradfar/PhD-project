@@ -20,15 +20,18 @@ from pipeline.common import RESULTS_DIR, log, setup_logging
 
 
 def bh(p: np.ndarray) -> np.ndarray:
+    """Benjamini-Hochberg q-values. NaN p-values (e.g. a model that did not converge) are left as
+    NaN and do not count towards the number of tests."""
     p = np.asarray(p, float)
-    n = np.sum(~np.isnan(p))
-    order = np.argsort(np.where(np.isnan(p), np.inf, p))
     q = np.full_like(p, np.nan)
+    valid = np.flatnonzero(~np.isnan(p))
+    n = valid.size
+    if n == 0:
+        return q
+    order = valid[np.argsort(p[valid])]  # ascending among valid p-values only
     prev = 1.0
-    for rank, i in enumerate(order[::-1]):
-        if np.isnan(p[i]):
-            continue
-        k = n - rank
+    for k in range(n, 0, -1):  # rank k = n .. 1
+        i = order[k - 1]
         prev = min(prev, p[i] * n / k)
         q[i] = prev
     return q

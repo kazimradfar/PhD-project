@@ -31,6 +31,17 @@ def test_bh_monotone_and_bounded():
     assert q[0] <= q[2] <= q[1] <= q[3]
 
 
+def test_bh_matches_reference_with_nan():
+    # Reference BH (4 valid tests): sorted 0.01, 0.03, 0.04, 0.5 -> q = 0.04, 0.0533, 0.0533, 0.5.
+    # NaNs must not change the number of tests or shift the ranks.
+    expected = np.array([0.04, 0.16 / 3, 0.16 / 3, 0.5])
+    np.testing.assert_allclose(bh(np.array([0.01, 0.04, 0.03, 0.5])), expected)
+    q = bh(np.array([np.nan, 0.01, 0.04, np.nan, 0.03, 0.5]))
+    assert np.isnan(q[0]) and np.isnan(q[3])
+    np.testing.assert_allclose(q[[1, 2, 4, 5]], expected)
+    assert np.isnan(bh(np.array([np.nan, np.nan]))).all()
+
+
 def test_combat_removes_batch_shift_and_rejects_unseen_batch():
     rng = np.random.default_rng(1)
     n = 120
