@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./data/**)",
+      "Read(./results/**)",
+      "Read(**/*.dcm)",
+      "Read(**/*.nii)",
+      "Read(**/*.nii.gz)",
+      "Read(**/*.nrrd)",
+      "Edit(./data/**)",
+      "Edit(./results/**)"
+    ]
+  }
+}
