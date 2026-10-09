@@ -46,6 +46,8 @@ pip install -r requirements.txt
 > `pyradiomics` در `requirements.txt` نیست، چون نصبش اغلب خطا می‌دهد و نباید جلوی نصب بقیه را بگیرد. فقط برای فاز ۱ (قدم ۴) لازم است و فاز ۲ بدون آن کار می‌کند. روش نصب جداگانه در `requirements-radiomics.txt` آمده است:
 > `pip install docopt-ng pykwalify` و بعد `pip install --no-deps "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git"`
 
+**بررسی نصب کتابخانه‌ها:** `python tools/check_environment.py` (برای هر کتابخانه OK یا MISSING نشان می‌دهد).
+
 **تست کامل pipeline** (حدود یک دقیقه):
 ```bash
 python tools/make_synthetic_data.py --n 12
